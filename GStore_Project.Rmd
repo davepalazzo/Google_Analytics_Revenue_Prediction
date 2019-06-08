@@ -1,0 +1,136 @@
+---
+title: "Final_Project"
+author: "Samantha Werdel and Dave Palazzo"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#install.packages('xgboost')
+library(xgboost)
+library(dplyr)
+library(ggplot2)
+#install.packages('naniar')
+library(naniar)
+#library(tidyverse)
+#library(glmnet)
+#library(caret)
+
+```
+
+
+```{r}
+train_data<-read.csv("train_data.csv",header=TRUE)
+test_data<-read.csv("test_data.csv",header=TRUE)
+
+# drop the first and second column of each dataframe (index)
+train_data <- train_data[-c(1,2)]
+test_data <- test_data[-c(1,2)]
+```
+
+## Missing Values
+
+Look at each variable and see what percentage of values are missing
+
+```{r}
+is_na_val <- function(x) x %in% c("not available in demo dataset", "(not provided)",
+                                  "(not set)", "<NA>", "unknown.unknown",  "(none)")
+
+# change missing values to NA
+train_data <- train_data %>% mutate_all(funs(ifelse(is_na_val(.), NA, .)))
+test_data <- test_data %>% mutate_all(funs(ifelse(is_na_val(.), NA, .)))
+
+# only show missing values greater than zero
+missing <- train_data[,train_data %>% summarize_all(funs(sum(is.na(.))/length(.))) > 0.01]
+gg_miss_var(missing, show_pct=TRUE)
+```
+
+```{r}
+# create y train and test
+y_train <- data.frame(train_data$totals.transactionRevenue)
+y_test <- data.frame(test_data$totals.transactionRevenue)
+
+# create X train and test
+X_train <- train_data[-c(43)]
+X_test <- test_data[-c(43)]
+```
+
+```{r}
+# change totals missing values to zero
+y_train[is.na(y_train)]<- 0
+y_test[is.na(y_test)]<- 0
+
+X_train$totals.totalTransactionRevenue[is.na(X_train$totals.totalTransactionRevenue)] <- 0
+X_train$totals.transactions[is.na(X_train$totals.transactions)] <- 0
+X_test$totals.totalTransactionRevenue[is.na(X_test$totals.totalTransactionRevenue)] <- 0
+X_test$totals.transactions[is.na(X_test$totals.transactions)] <- 0
+
+```
+
+Drop columns with 100% missing values
+
+```{r}
+drop_names <- c("trafficSource.adwordsClickInfo.criteriaParameters","geoNetwork.networkLocation","geoNetwork.longitude","geoNetwork.latitude","geoNetwork.cityId","device.screenResolution","device.screenColors","device.operatingSystemVersion", "device.mobileInputSelector","device.mobileDeviceModel","device.mobileDeviceMarketingName","device.mobileDeviceInfo","device.mobileDeviceBranding","device.language","device.flashVersion","device.browserVersion","device.browserSize")
+
+X_train <- X_train[,!(names(X_train) %in% drop_names)]
+X_test <- X_test[,!(names(X_test) %in% drop_names)]
+
+```
+
+```{r}
+# convert date to date datatype
+X_train$date <- as.Date(as.character(X_train$date), "%Y%m%d")
+X_test$date <- as.Date(as.character(X_test$date), "%Y%m%d")
+```
+
+```{r}
+nrow(data.matrix(X_train_xgb))
+```
+
+```{r}
+X_train_xgb <- X_train %>% mutate_if(is.factor,as.integer)
+xgb <- xgboost(data = data.matrix(X_train_xgb),label = 1:nrow(y_train), nrounds = 2000)
+y_pred <- predict(xgb, data.matrix(X_test))
+
+```
+
+
+
+```{r}
+# create df of both train and test to create factors
+X <- X_train %>% bind_rows(X_test)
+X_xgb <- X %>% mutate_if(is.factor, as.integer) 
+idx <- X_train$date < as.Date(as.character(20160808), "%Y%m%d")
+
+# create train, validation and test sets
+dtest <- xgb.DMatrix(data = data.matrix(X_xgb[-(1:nrow(X_train)), ]))
+train <- X_xgb[(1:nrow(X_train)), ]
+dtrain <- xgb.DMatrix(data = data.matrix(train[idx, ]))
+dval <- xgb.DMatrix(data = data.matrix(train[!idx, ]))
+
+
+X_train_xgb <- X_train %>% mutate_if(is.factor, as.integer) 
+Dtrain <- xgb.DMatrix(data = data.matrix(X_train_xgb))
+#X_test_xgb <- X_test %>% mutate_if(is.factor, as.integer) 
+
+xgb <- xgboost(Dtrain, label = y_train-1, nrounds = 25)
+#params <- list(booster='gbtree',max_depth=6, subsample=0.7, nrounds =10)
+#xgb <- xgb.train(params,dtrain, params$nrounds, list(val = dval))
+
+```
+
+```{r}
+
+```
+
+```{r}
+X_names <- names(X_train)
+
+importance_matrix <- xgb.importance(X_names, model = xgb)
+# Nice graph
+xgb.plot.importance(importance_matrix)
+```
+
+```{r}
+
+```
