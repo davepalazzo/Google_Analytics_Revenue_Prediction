@@ -104,10 +104,17 @@ y_train <- log1p(y_train)
 dtrain <- xgb.DMatrix(data = data.matrix(X_train),label = data.matrix(y_train))
 dtest <- xgb.DMatrix(data = data.matrix(X_test),label=data.matrix(y_test))
 ```
+We'll use cross validation in order to find the optimal max number of boosting iterations.
 
 ```{r}
-xgb <- xgb.train(data = dtrain, nrounds = 50)
-y_pred <- predict(xgb, dtest)
+set.seed(123456)
+xgbcv <- xgb.cv(data = dtrain, nrounds = 100, nfold = 5, stratified = T,early_stopping_rounds = 20)
+nrounds <- xgbcv$best_iteration
+#y_pred <- predict(xgb, dtest)
+```
+
+```{r}
+xgb <- xgb.train(data = dtrain, nrounds = nrounds,watchlist = list(val=dtest, train=dtrain))
 ```
 
 
