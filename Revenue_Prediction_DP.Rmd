@@ -13,6 +13,7 @@ library(xgboost)
 library(dplyr) 
 library(naniar)
 library(jsonlite)
+library(reshape)
 ```
 
 ```{r}
@@ -114,16 +115,99 @@ nrounds <- xgbcv$best_iteration
 ```
 
 ```{r}
-xgb <- xgb.train(data = dtrain, nrounds = nrounds,watchlist = list(val=dtest, train=dtrain))
+#xgb <- xgb.train(data = dtrain, nrounds = nrounds,watchlist = list(val=dtest, train=dtrain))
+#xgb$evaluation_log$val_rmse
 ```
+
+
 
 
 ```{r}
-X_names <- names(X_train)
-importance_matrix <- xgb.importance(X_names, model = xgb)
+#X_names <- names(X_train)
+#importance_matrix <- xgb.importance(X_names, model = xgb)
 # Nice graph
-xgb.plot.importance(importance_matrix)
+#xgb.plot.importance(importance_matrix)
+
+```
+
+```{r}
+#ETA
+set.seed(1)
+eta=c(0.05,0.1,0.2,0.5,1)
+conv_eta = matrix(NA,500,length(eta))
+pred_eta = matrix(NA,500,length(eta))
+colnames(conv_eta) = colnames(pred_eta) = eta
+for(i in 1:length(eta)){
+  params=list(eta = eta[i], colsample_bylevel=2/3,
+              subsample = 0.5, max_depth = 6,
+              min_child_weigth = 1)
+  xgb <- xgb.train(data = dtrain, nrounds = 500 , params = params, watchlist = list(val=dtest, train=dtrain))
+  conv_eta[,i] = xgb$evaluation_log$train_rmse
+  pred_eta[,i] = xgb$evaluation_log$val_rmse
+}
+
+conv_eta = data.frame(iter=1:500, conv_eta)
+conv_eta = melt(conv_eta,id.vars = "iter")
+
+g<- ggplot(data = conv_eta) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Training Set Effect of Learning parameter", y = "RMSE", x= "Number of Iterations")
+print(g)
+
+pred_eta = data.frame(iter=1:500, pred_eta)
+pred_eta = melt(pred_eta,id.vars = "iter")
+
+gg<- ggplot(data = pred_eta) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Test Set Effect of Learning parameter", y = "RMSE", x= "Number of Iterations")
+print(gg)
 ```
 
 
+
+```{r}
+# Max Depth
+md=c(2,4,6,10)
+conv_md = matrix(NA,50,length(md))
+pred_md = matrix(NA,50,length(md))
+colnames(conv_md) = colnames(pred_md) = md
+for(i in 1:length(md)){
+  params=list(eta=0.1,colsample_bylevel=2/3,
+              subsample=0.5,max_depth=md[i],
+              min_child_weigth=1)
+  xgb <- xgb.train(data = dtrain, nrounds = 50 , params = params, watchlist = list(val=dtest, train=dtrain))
+  conv_md[,i] = xgb$evaluation_log$train_rmse
+  pred_md[,i] = xgb$evaluation_log$val_rmse
+}
+
+conv_md = data.frame(iter=1:50, conv_md)
+conv_md = melt(conv_md, id.vars = "iter")
+pred_md = data.frame(iter=1:50, pred_md)
+pred_md = melt(pred_md, id.vars = "iter")
+
+g <- ggplot(data = conv_md) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Training Set Error Max Depth", y = "RMSE", x= "Number of Iterations")
+print(g)
+gg<- ggplot(data = pred_md) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Validation Set Error Max Depth", y = "RMSE", x= "Number of Iterations")
+print(gg)
+
+```
+
+```{r}
+# Gamma 
+set.seed(1)
+gamma=c(0.1,1,10,100)
+conv_gamma = matrix(NA,500,length(gamma))
+pred_gamma = matrix(NA,nrow(X_test), length(gamma))
+colnames(conv_gamma) = colnames(pred_gamma) = gamma
+for(i in 1:length(gamma)){
+  params = list(eta = 0.1, colsample_bylevel=2/3,
+              subsample = 1, max_depth = 6, min_child_weight = 1,
+              gamma = gamma[i])
+  xgb = xgboost(dtrain, nrounds = 500, params = params)
+  conv_gamma[,i] = xgb$evaluation_log$train_rmse
+  pred_gamma[,i] = predict(xgb, dtest)
+}
+ 
+conv_gamma = data.frame(iter=1:500, conv_gamma)
+conv_gamma = melt(conv_gamma, id.vars = "iter")
+ggplot(data = conv_gamma) + geom_line(aes(x = iter, y = value, color = variable))+ labs(title = "Gamma Values", y = "RMSE", x= "Number of Iterations")
+(RMSE_gamma = sqrt(colMeans((y_test-pred_gamma)^2)))
+pred_gamma
+```
 
