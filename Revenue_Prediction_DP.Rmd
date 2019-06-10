@@ -14,6 +14,7 @@ library(dplyr)
 library(naniar)
 library(jsonlite)
 library(reshape)
+library(mlr)
 ```
 
 ```{r}
@@ -31,6 +32,8 @@ y_train <- train_data$totals.transactionRevenue
 X_train <- train_data[, !(colnames(train_data) %in% c('totals.transactionRevenue'))]
 y_test <- test_data$totals.transactionRevenue
 X_test <- test_data[, !(colnames(test_data) %in% c('totals.transactionRevenue'))]
+# Split index for validation data
+split_idx <- X_train$date < 20160808
 ```
 
 ```{r}
@@ -48,10 +51,10 @@ X_test <- X_test[,!(names(X_test) %in% drop_names)]
 
 ```{r}
 # Drop ID columns and total Rev
-X_train %<>% 
+X_train <- X_train %<>% 
   select(-date, -fullVisitorId, -visitId, -visitStartTime, -totals.totalTransactionRevenue, -totals.transactions) %>% 
   mutate_if(is.character, funs(factor(.) %>% as.integer))
-X_test  %<>% 
+X_test <- X_test  %<>% 
   select(-date, -fullVisitorId, -visitId, -visitStartTime,  -totals.totalTransactionRevenue,-totals.transactions) %>% 
   mutate_if(is.character, funs(factor(.) %>% as.integer))
 # Replace NAs with 0 for y variable revenue
@@ -102,24 +105,17 @@ y_train <- log1p(y_train)
 
 
 ```{r}
-dtrain <- xgb.DMatrix(data = data.matrix(X_train),label = data.matrix(y_train))
+dtrain <- xgb.DMatrix(data = data.matrix(X_train[split_idx, ]), label = data.matrix(y_train[split_idx ]))
+dval <- xgb.DMatrix(data = data.matrix(X_train[!split_idx, ]), label = data.matrix(y_train[!split_idx ]))
 dtest <- xgb.DMatrix(data = data.matrix(X_test),label=data.matrix(y_test))
 ```
 We'll use cross validation in order to find the optimal max number of boosting iterations.
 
-```{r}
-set.seed(123456)
-xgbcv <- xgb.cv(data = dtrain, nrounds = 100, nfold = 5, stratified = T,early_stopping_rounds = 20)
-nrounds <- xgbcv$best_iteration
-#y_pred <- predict(xgb, dtest)
-```
 
 ```{r}
-#xgb <- xgb.train(data = dtrain, nrounds = nrounds,watchlist = list(val=dtest, train=dtrain))
-#xgb$evaluation_log$val_rmse
+xgb <- xgb.train(data = dtrain, nrounds = nrounds,watchlist = list(val=dtest, train=dtrain))
+xgb$evaluation_log$val_rmse
 ```
-
-
 
 
 ```{r}
@@ -134,28 +130,29 @@ nrounds <- xgbcv$best_iteration
 #ETA
 set.seed(1)
 eta=c(0.05,0.1,0.2,0.5,1)
-conv_eta = matrix(NA,500,length(eta))
-pred_eta = matrix(NA,500,length(eta))
-colnames(conv_eta) = colnames(pred_eta) = eta
+train_eta = matrix(NA,100,length(eta))
+val_eta = matrix(NA,100,length(eta))
+colnames(train_eta) = colnames(val_eta) = eta
+
 for(i in 1:length(eta)){
   params=list(eta = eta[i], colsample_bylevel=2/3,
               subsample = 0.5, max_depth = 6,
-              min_child_weigth = 1)
-  xgb <- xgb.train(data = dtrain, nrounds = 500 , params = params, watchlist = list(val=dtest, train=dtrain))
-  conv_eta[,i] = xgb$evaluation_log$train_rmse
-  pred_eta[,i] = xgb$evaluation_log$val_rmse
+              min_child_weight = 1)
+  xgb <- xgb.train(data = dtrain, nrounds = 100 , params = params, watchlist = list(val=dval, train=dtrain), verbose = 0)
+  train_eta[,i] = xgb$evaluation_log$train_rmse
+  val_eta[,i] = xgb$evaluation_log$val_rmse
 }
 
-conv_eta = data.frame(iter=1:500, conv_eta)
-conv_eta = melt(conv_eta,id.vars = "iter")
+train_eta = data.frame(iter=1:100, train_eta)
+train_eta = melt(train_eta,id.vars = "iter")
 
-g<- ggplot(data = conv_eta) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Training Set Effect of Learning parameter", y = "RMSE", x= "Number of Iterations")
+g<- ggplot(data = train_eta) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Training Set Effect of Learning parameter", y = "RMSE", x= "Number of Iterations")
 print(g)
 
-pred_eta = data.frame(iter=1:500, pred_eta)
-pred_eta = melt(pred_eta,id.vars = "iter")
+val_eta = data.frame(iter=1:100, val_eta)
+val_eta = melt(val_eta,id.vars = "iter")
 
-gg<- ggplot(data = pred_eta) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Test Set Effect of Learning parameter", y = "RMSE", x= "Number of Iterations")
+gg<- ggplot(data = val_eta) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Validation Set Effect of Learning parameter", y = "RMSE", x= "Number of Iterations")
 print(gg)
 ```
 
@@ -164,26 +161,26 @@ print(gg)
 ```{r}
 # Max Depth
 md=c(2,4,6,10)
-conv_md = matrix(NA,50,length(md))
-pred_md = matrix(NA,50,length(md))
-colnames(conv_md) = colnames(pred_md) = md
+train_md = matrix(NA,100,length(md))
+val_md = matrix(NA,100,length(md))
+colnames(train_md) = colnames(val_md) = md
 for(i in 1:length(md)){
   params=list(eta=0.1,colsample_bylevel=2/3,
               subsample=0.5,max_depth=md[i],
-              min_child_weigth=1)
-  xgb <- xgb.train(data = dtrain, nrounds = 50 , params = params, watchlist = list(val=dtest, train=dtrain))
-  conv_md[,i] = xgb$evaluation_log$train_rmse
-  pred_md[,i] = xgb$evaluation_log$val_rmse
+              min_child_weight=1)
+  xgb <- xgb.train(data = dtrain, nrounds = 100 , params = params, watchlist = list(val=dval, train=dtrain), verbose = 0)
+  train_md[,i] = xgb$evaluation_log$train_rmse
+  val_md[,i] = xgb$evaluation_log$val_rmse
 }
 
-conv_md = data.frame(iter=1:50, conv_md)
-conv_md = melt(conv_md, id.vars = "iter")
-pred_md = data.frame(iter=1:50, pred_md)
-pred_md = melt(pred_md, id.vars = "iter")
+train_md = data.frame(iter=1:100, train_md)
+train_md = melt(train_md, id.vars = "iter")
+val_md = data.frame(iter=1:100, val_md)
+val_md = melt(val_md, id.vars = "iter")
 
-g <- ggplot(data = conv_md) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Training Set Error Max Depth", y = "RMSE", x= "Number of Iterations")
+g <- ggplot(data = train_md) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Training Set Error Max Depth", y = "RMSE", x= "Number of Iterations")
 print(g)
-gg<- ggplot(data = pred_md) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Validation Set Error Max Depth", y = "RMSE", x= "Number of Iterations")
+gg<- ggplot(data = val_md) + geom_line(aes(x = iter, y = value, color = variable)) + labs(title = "Validation Set Error Max Depth", y = "RMSE", x= "Number of Iterations")
 print(gg)
 
 ```
@@ -192,22 +189,67 @@ print(gg)
 # Gamma 
 set.seed(1)
 gamma=c(0.1,1,10,100)
-conv_gamma = matrix(NA,500,length(gamma))
-pred_gamma = matrix(NA,nrow(X_test), length(gamma))
-colnames(conv_gamma) = colnames(pred_gamma) = gamma
+train_gamma = matrix(NA,100,length(gamma))
+val_gamma = matrix(NA,100,length(gamma))
+colnames(train_gamma) = colnames(val_gamma) = gamma
 for(i in 1:length(gamma)){
   params = list(eta = 0.1, colsample_bylevel=2/3,
               subsample = 1, max_depth = 6, min_child_weight = 1,
               gamma = gamma[i])
-  xgb = xgboost(dtrain, nrounds = 500, params = params)
-  conv_gamma[,i] = xgb$evaluation_log$train_rmse
-  pred_gamma[,i] = predict(xgb, dtest)
+  xgb <- xgb.train(data = dtrain, nrounds = 100 , params = params, watchlist = list(val=dval, train=dtrain), verbose = 0)
+  train_gamma[,i] = xgb$evaluation_log$train_rmse
+  val_gamma[,i] = xgb$evaluation_log$val_rmse
 }
  
-conv_gamma = data.frame(iter=1:500, conv_gamma)
-conv_gamma = melt(conv_gamma, id.vars = "iter")
-ggplot(data = conv_gamma) + geom_line(aes(x = iter, y = value, color = variable))+ labs(title = "Gamma Values", y = "RMSE", x= "Number of Iterations")
-(RMSE_gamma = sqrt(colMeans((y_test-pred_gamma)^2)))
-pred_gamma
+train_gamma = data.frame(iter=1:100, train_gamma)
+train_gamma = melt(train_gamma, id.vars = "iter")
+ggplot(data = train_gamma) + geom_line(aes(x = iter, y = value, color = variable))+ labs(title = "Training Set Gamma Values", y = "RMSE", x= "Number of Iterations")
+
+val_gamma = data.frame(iter=1:100, val_gamma)
+val_gamma = melt(val_gamma, id.vars = "iter")
+ggplot(data = val_gamma) + geom_line(aes(x = iter, y = value, color = variable))+ labs(title = "Gamma Value Error Validation Set", y = "RMSE", x= "Number of Iterations")
+
 ```
+
+We'll now use the mlr library to do hyperparameter tunning. 
+
+```{r}
+params <- makeParamSet(makeDiscreteParam("booster",values = c("gbtree","gblinear")), makeIntegerParam("max_depth",lower = 3L,upper = 10L), makeNumericParam("min_child_weight",lower = 1L,upper = 10L), makeNumericParam("subsample",lower = 0.5,upper = 1),makeIntegerParam("nrounds",lower = 2L,upper = 20L) ,makeNumericParam("colsample_bytree",lower = 0.5,upper = 1))
+
+X_train <- X_train %>%mutate_if(is.factor, as.integer)
+
+trainDf <- X_train[split_idx, ]
+trainDf$target = y_train[split_idx ]
+
+traintask <- makeRegrTask (data = data.frame(trainDf),target = 'target')
+
+valDf <- X_train[!split_idx, ]
+valDf$target = y_train[!split_idx ]
+
+testtask <- makeRegrTask(data = data.frame(valDf),target = 'target')
+
+lrn <- makeLearner("regr.xgboost")
+lrn$par.vals <- list( objective='reg:linear', nrounds=100L, eta=0.05)
+rdesc <- makeResampleDesc("CV",iters=5L)
+
+ctrl <- makeTuneControlRandom(maxit = 10L)
+
+mytune <- tuneParams(learner = lrn, task = traintask,resampling=rdesc, par.set = params, control = ctrl, show.info = T)
+mytune
+```
+
+Now that we have tunned the parameters to the model, let's train the final model and see how it performs on the test set.
+```{r}
+lrn_tune <- setHyperPars(lrn,par.vals = mytune$x)
+# Use both train and validation sets to train final model 
+dtrain <- xgb.DMatrix(data = data.matrix(X_train), label = data.matrix(y_train))
+xgb <- xgb.train(data = dtrain,nrounds = 7,lrn_tune=lrn_tune,watchlist = list(val=dtest, train=dtrain))
+```
+```{r}
+X_names <- names(X_train)
+importance_matrix <- xgb.importance(X_names, model = xgb)
+xgb.plot.importance(importance_matrix)
+```
+
+
 
