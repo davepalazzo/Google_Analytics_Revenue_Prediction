@@ -234,7 +234,7 @@ Above we can see the impact of different gamma values. Here we see much less var
 
 We'll now use the mlr library to do hyperparameter tuning. 
 
-```{r}
+```{r results="hide"}
 set.seed(3231)
 params <- makeParamSet(makeDiscreteParam("booster",values = c("gbtree","gblinear")), makeIntegerParam("max_depth",lower = 3L,upper = 10L), makeNumericParam("min_child_weight",lower = 1L,upper = 10L), makeNumericParam("subsample",lower = 0.5,upper = 1),makeIntegerParam("nrounds",lower = 2L,upper = 20L) ,makeNumericParam("colsample_bytree",lower = 0.5,upper = 1),makeNumericParam("eta", lower = .1, upper = .5))
 
@@ -262,7 +262,6 @@ mytune <- tuneParams(learner = lrn, task = traintask, resampling=rdesc, par.set 
 
 Now that we have tuned the parameters to the model, let's train the final model and see how it performs on the test set.
 ```{r}
-
 lrn_tune <- setHyperPars(lrn,par.vals = mytune$x)
 print(lrn_tune)
 xgb_model <- train(lrn_tune, traintask)
